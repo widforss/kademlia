@@ -12,4 +12,7 @@ FROM alpine:latest
 #
 # $ docker build . -t kadlab
 
+RUN apk add --no-cache tmux
+
 COPY ping2container.sh .
+COPY mock-kademlia.sh ./kademlia
