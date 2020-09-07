@@ -11,3 +11,5 @@ FROM alpine:latest
 # "kadlab", which you do by using the following command:
 #
 # $ docker build . -t kadlab
+
+COPY ping2container.sh .
