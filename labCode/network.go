@@ -62,7 +62,21 @@ func Listen(ip string, port int, network *Network) {
 // Below handlers for outgoing messages
 
 func (network *Network) SendPingMessage(contact *Contact) {
-	// TODO
+    //testing required
+    params := []string {}
+    msg := Message{
+        Type : "RPC",
+        Name : "PING",
+        RequestID : NewRandomKademliaID().String(),
+        Source : network.RoutingTable.me.ID.String(),
+        Destination : contact.ID.String(),
+        Params : params,
+    }
+    err := sendMsg(msg, contact.Address)
+    if err != nil {
+        fmt.Println("Error when sending ping");
+    }
+    return
 }
 
 func (network *Network) SendFindContactMessage(contact *Contact) {
@@ -80,8 +94,23 @@ func (network *Network) SendStoreMessage(data []byte) {
 // Below handlers for requests from other clients
 
 func (network *Network) returnPingMessage(msg Message, contact *Contact) {
-	// TODO
+    //testing required
+    params := []string {}
+    reply := Message{
+        Type : "RETURN",
+        Name : "PING",
+        RequestID : msg.RequestID,
+        Source : network.RoutingTable.me.ID.String(),
+        Destination : contact.ID.String(),
+        Params : params,
+    }
+    err := sendMsg(reply, contact.Address)
+    if err != nil {
+        fmt.Println("Error when repling to ping");
+    }
+    return
 }
+
 
 func (network *Network) returnFindContactMessage(msg Message, contact *Contact) {
 	// TODO
@@ -111,6 +140,33 @@ func (network *Network) handleFindDataMessage(msg Message, contact *Contact) {
 
 func (network *Network) handleStoreMessage(msg Message, contact *Contact) {
     // TODO
+}
+/*
+Converts msg to byte array then
+sends byte array to target address at port 9000
+returns error
+*/
+func sendMsg(msg Message, address string)(error) {
+    //testing required
+    buf, err := json.Marshal(msg)
+    if err != nil {
+        return fmt.Errorf("Serialization of msg failed")
+    }
+    var port = 9000
+    iface_port := address + ":" +strconv.Itoa(port)
+    conn, err := net.Dial("udp", iface_port)
+    if err != nil {
+        return fmt.Errorf("Failed to connect to host")
+    }
+    _, err = conn.Write(buf)
+    if err != nil {
+        return fmt.Errorf("Failed to write to host")
+    }
+    err = conn.Close()
+    if err != nil {
+        return fmt.Errorf("Error on close")
+    }
+    return nil
 }
 
 func parseMsg(addr net.Addr, buf []byte, network *Network) (Message, error) {
