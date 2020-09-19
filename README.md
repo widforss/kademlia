@@ -3,7 +3,7 @@
 This is a Kademlia implementation written in the course D7024E at LTU in
 fall 2020.
 
-# Installation of Docker packages
+## Installation of Docker packages
 Install Docker packages (exact command may be environment dependent).
 
 apt-get install docker.io
@@ -11,7 +11,7 @@ apt-get install docker-compose
 
 Note: You may need to use sudo during installation or use.
 
-# Docker swarm
+## Docker swarm
 
 Specify desired number of replicated containers in  `Dockerfile` in line for `replicas`
 
@@ -19,22 +19,23 @@ Specify desired number of replicated containers in  `Dockerfile` in line for `re
       mode: replicated
       replicas: 50
 
-Change directory to `docker`
-
+    ./build.sh
     cd docker
-
-Build the `kadlab` image
-
     docker build . -t kadlab
-
-Initialize a swarm
-
     docker swarm init
-
-Deploy the containers
-
     docker stack deploy --compose-file docker-compose.yml kadstack
 
+Here you must wait for the containers to spin up. You can check that it is all done
+by running `docker ps | wc` and see that the amount of lines is `n + 1`.
+
+    ./bootstrap.sh
+
+Say you want to log in to a specific node, e.g., `2cdaa139`
+
+    docker exec -it 2cdaa139 /bin/sh
+    tmux attach
+
+## Connection test
 To test communication between containers, We first find the container id by listing all active containers:
 
     docker ps
