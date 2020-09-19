@@ -6,113 +6,266 @@ import(
     "net"
     "regexp"
     "strconv"
+    "time"
 )
+
+const MESSAGE_RECORD_LEN = 1024
+const ALPHA = 3
+const TTL = time.Second
 
 var hash_rx, _ = regexp.Compile(`[0-9a-f]{` + strconv.Itoa(IDLength) + `}`)
 
 type Network struct {
     RoutingTable *RoutingTable
+    MessageRecord MessageRecord
+    Conn net.PacketConn
 }
 
-type Message struct {
-    Type string `json:"type"`
-    Name string `json:"name"`
-    RequestID string `json:"requestId"`
-    Source string `json:"source"`
-    Destination string `json:"destination"`
-    Params []string `json:"params"`
-}
+func NewNetwork(ip string, port uint16) Network {
+    id := NewRandomKademliaID()
+    me := NewContact(id, "127.0.0.1:" + strconv.Itoa(int(port)))
+    me.CalcDistance(me.ID)
 
-func Listen(ip string, port int, network *Network) {
-    iface_port := ip + ":" + strconv.Itoa(port)
-
+    iface_port := ip + ":" + strconv.Itoa(int(port))
     conn, err := net.ListenPacket("udp", iface_port)
     if err != nil {
-            fmt.Println(err)
-            return
+        panic(err)
     }
-    defer conn.Close()
 
+    network := Network{
+        RoutingTable: NewRoutingTable(me),
+        MessageRecord: NewMessageRecord(),
+        Conn: conn,
+    }
+
+    go Listen(ip, port, &network)
+
+    return network
+}
+
+func Listen(ip string, port uint16, network *Network) {
     var buf [4096]byte
     for {
-        n, addr, err := conn.ReadFrom(buf[0:])
+        n, addr, err := network.Conn.ReadFrom(buf[0:])
         if err != nil {
-            fmt.Println(err)
+            println("%#v", err)
             continue
         }
 
-        msg, err := parseMsg(addr, buf[:n], network)
+        msg, err := ParseMessage(buf[:n])
         if err != nil {
-            fmt.Println(err)
+            println("%#v", err)
             continue
         }
 
-        id := NewKademliaID(msg.Source)
-        contact := Contact{
-            ID: id,
-            Address: addr.String(),
-            distance: network.RoutingTable.me.ID.CalcDistance(id),
-        }
-        network.RoutingTable.AddContact(contact)
+        meID := NewKademliaID(msg.Destination)
+        sourceID := NewKademliaID(msg.Source)
+        if meID.Equals(network.RoutingTable.me.ID) ||
+            (msg.Type == "RPC" && msg.Name == "PING") {
+            contact := Contact{
+                ID: sourceID,
+                Address: addr.String(),
+            }
+            network.RoutingTable.AddContact(contact)
 
-        routeMsg(msg, &contact, network)
+            routeMsg(msg, &contact, network)
+        } else {
+            println("Received malformed message!")
+        }
     }
 }
 
-// Below handlers for outgoing messages
+func (network *Network) Join(peer string, ready chan bool) {
+    msgID := NewRandomKademliaID().String()
+    firstMsg := Message{
+        Type : "RPC",
+        Name : "PING",
+        RequestID : msgID,
+        Source : network.RoutingTable.me.ID.String(),
+        Destination : network.RoutingTable.me.ID.String(),
+        Params : []string{},
+    }
+    fmt.Println(
+        "TX_JOIN_RPC:",
+        firstMsg.Source,
+        firstMsg.Destination,
+        firstMsg.RequestID,
+    )
 
-func (network *Network) SendPingMessage(contact *Contact) {
-    //testing required
-    params := []string {}
+    emptyMap := make(map[KademliaID]struct{})
+    network.MessageRecord.RecordMessage(
+        msgID,
+        func(msg Message, contact Contact) {
+            fmt.Println("RX_JOIN_RES:", msg.Source, msg.Destination, msg.RequestID)
+            network.SendFindContactMessage(
+                *network.RoutingTable.me.ID,
+                &emptyMap,
+            )
+            ready <- true
+        }, func() {
+            ready <- false
+        },
+    )
+
+    tmpContact := NewContact(NewRandomKademliaID(), peer)
+    network.send(firstMsg, &tmpContact)
+}
+
+func (network *Network) SendPingMessage(
+    contact *Contact,
+    onReply func(contact Contact),
+) {
+    msgID := NewRandomKademliaID().String()
     msg := Message{
         Type : "RPC",
         Name : "PING",
-        RequestID : NewRandomKademliaID().String(),
+        RequestID : msgID,
         Source : network.RoutingTable.me.ID.String(),
         Destination : contact.ID.String(),
-        Params : params,
+        Params : []string{},
     }
-    err := sendMsg(msg, contact.Address)
-    if err != nil {
-        fmt.Println("Error when sending ping");
-    }
-    return
-}
+    fmt.Println("TX_PING_RPC:", msg.Source, msg.Destination, msg.RequestID)
+    network.send(msg, contact)
 
-func (network *Network) SendFindContactMessage(contact *Contact) {
-	// TODO
+    network.MessageRecord.RecordMessage(
+        msgID,
+        func(_ Message, contact Contact) {
+            fmt.Println("RX_PING_RES:", msg.Source, msg.Destination, msg.RequestID)
+            onReply(contact)
+        }, func() {
+            println("PING RPC failed!")
+        },
+    )
 }
-
-func (network *Network) SendFindDataMessage(hash string) {
-	// TODO
-}
-
-func (network *Network) SendStoreMessage(data []byte) {
-	// TODO
-}
-
-// Below handlers for requests from other clients
 
 func (network *Network) returnPingMessage(msg Message, contact *Contact) {
-    //testing required
-    params := []string {}
+    fmt.Println("RX_PING_RPC:", msg.Source, msg.Destination, msg.RequestID)
     reply := Message{
         Type : "RETURN",
         Name : "PING",
         RequestID : msg.RequestID,
         Source : network.RoutingTable.me.ID.String(),
         Destination : contact.ID.String(),
-        Params : params,
+        Params : []string{},
     }
-    err := sendMsg(reply, contact.Address)
-    if err != nil {
-        fmt.Println("Error when repling to ping");
+    fmt.Println("TX_PING_RES:", msg.Source, msg.Destination, msg.RequestID)
+    network.send(reply, contact)
+}
+
+func (network *Network) SendFindContactMessage(
+    askFor KademliaID,
+    sentTo *map[KademliaID]struct{},
+) {
+    sendTo := make([]*Contact, 0)
+    searchLen := 1
+    for searchLen >= bucketSize || len(sendTo) < ALPHA {
+        closeSlice := network.RoutingTable.FindClosestContacts(
+            &askFor,
+            searchLen,
+        )
+
+        if len(closeSlice) < searchLen {
+            break
+        }
+
+        closeContact := closeSlice[len(closeSlice) - 1]
+        if _, ok := (*sentTo)[*closeContact.ID]; !ok {
+            sendTo = append(sendTo, &closeContact)
+            (*sentTo)[*closeContact.ID] = struct{}{}
+        }
+        searchLen++
     }
-    return
+
+    // Base case
+    if searchLen >= bucketSize || len(sendTo) == 0 {
+        return
+    }
+
+    for _, to := range sendTo {
+        msgID := NewRandomKademliaID().String()
+        msg := Message{
+            Type: "RPC",
+            Name: "FIND-NODE",
+            RequestID: msgID,
+            Source: network.RoutingTable.me.ID.String(),
+            Destination: to.ID.String(),
+            Params: []string{askFor.String()},
+        }
+
+        network.MessageRecord.RecordMessage(
+            msgID,
+            func(msg Message, contact Contact) {
+                network.handleFindContactMessage(msg, &contact, askFor, sentTo)
+            }, func() {
+                network.SendFindContactMessage(askFor, sentTo)
+            },
+        )
+
+        fmt.Println("TX_FIND_RPC:", msg.Source, msg.Destination, msg.RequestID)
+        network.send(msg, to)
+    }
+}
+
+func (network *Network) returnFindContactMessage(
+    msg Message,
+    contact *Contact,
+) {
+    fmt.Println("RX_FIND_RPC:", msg.Source, msg.Destination, msg.RequestID)
+    if len(msg.Params) != 1 {
+        println("Malformed FIND-NODE message!")
+    }
+
+    response := Message{
+        Type: "RETURN",
+        Name: "FIND-NODE",
+        RequestID: msg.RequestID,
+        Source: network.RoutingTable.me.ID.String(),
+        Destination: contact.ID.String(),
+    }
+
+    asksFor := NewKademliaID(msg.Params[0])
+    contacts := network.RoutingTable.FindClosestContacts(asksFor, bucketSize)
+    contactList := make([]string, 0)
+    for i := 0; i < len(contacts); i++ {
+        contactList = append(contactList, contacts[i].ID.String())
+        contactList = append(contactList, contacts[i].Address)
+    }
+    response.Params = contactList
+    fmt.Println("TX_FIND_RES:", msg.Source, msg.Destination, msg.RequestID)
+    network.send(response, contact)
+}
+
+func (network *Network) handleFindContactMessage(
+    msg Message,
+    contact *Contact,
+    askFor KademliaID,
+    sentTo *map[KademliaID]struct{},
+) {
+    fmt.Println("RX_FIND_RES:", msg.Source, msg.Destination, msg.RequestID)
+    params := msg.Params
+    if len(params) == 0 || len(params) % 2 == 1 {
+        println("Malformed FIND-NODE response!")
+        return
+    }
+
+    var newContacts []Contact
+    for i := 0; i < len(params); i = i + 2 {
+        newID := params[i]
+        newAddress := params[i + 1]
+        newContact := NewContact(NewKademliaID(newID), newAddress)
+        newContacts = append(newContacts, newContact)
+        network.RoutingTable.AddContact(newContact)
+    }
+
+    network.SendFindContactMessage(askFor, sentTo)
 }
 
 
-func (network *Network) returnFindContactMessage(msg Message, contact *Contact) {
+func (network *Network) SendFindDataMessage(hash string) {
+	// TODO
+}
+
+func (network *Network) SendStoreMessage(data []byte) {
 	// TODO
 }
 
@@ -124,72 +277,12 @@ func (network *Network) returnStoreMessage(msg Message, contact *Contact) {
 	// TODO
 }
 
-// Below handlers for responses to messages we've sent
-
-func (network *Network) handlePingMessage(msg Message, contact *Contact) {
-	// TODO
-}
-
-func (network *Network) handleFindContactMessage(msg Message, contact *Contact) {
-	// TODO
-}
-
 func (network *Network) handleFindDataMessage(msg Message, contact *Contact) {
 	// TODO
 }
 
 func (network *Network) handleStoreMessage(msg Message, contact *Contact) {
     // TODO
-}
-/*
-Converts msg to byte array then
-sends byte array to target address at port 9000
-returns error
-*/
-func sendMsg(msg Message, address string)(error) {
-    //testing required
-    buf, err := json.Marshal(msg)
-    if err != nil {
-        return fmt.Errorf("Serialization of msg failed")
-    }
-    var port = 9000
-    iface_port := address + ":" +strconv.Itoa(port)
-    conn, err := net.Dial("udp", iface_port)
-    if err != nil {
-        return fmt.Errorf("Failed to connect to host")
-    }
-    _, err = conn.Write(buf)
-    if err != nil {
-        return fmt.Errorf("Failed to write to host")
-    }
-    err = conn.Close()
-    if err != nil {
-        return fmt.Errorf("Error on close")
-    }
-    return nil
-}
-
-func parseMsg(addr net.Addr, buf []byte, network *Network) (Message, error) {
-    var msg Message
-    err := json.Unmarshal(buf, &msg)
-    if err != nil {
-        return msg, err
-    }
-    if msg.Type != "RPC" && msg.Type != "RETURN" {
-        return msg, fmt.Errorf("Unknown message type: %q", msg.Type)
-    }
-    if  msg.Name != "PING"       && msg.Name != "FIND-NODE" &&
-        msg.Name != "FIND-VALUE" && msg.Name != "STORE" {
-        return msg, fmt.Errorf("Unknown message name: %q", msg.Name)
-    }
-    id_ok := hash_rx.MatchString(msg.RequestID)
-    src_ok := hash_rx.MatchString(msg.Source)
-    dst_ok := hash_rx.MatchString(msg.Destination)
-    msg_ok := hash_rx.MatchString(msg.RequestID)
-    if !id_ok || !src_ok || !dst_ok || !msg_ok {
-        return msg, fmt.Errorf("Invalid hash in message:\n%+v", msg)
-    }
-    return msg, err
 }
 
 func routeMsg(msg Message, contact *Contact, network *Network) {
@@ -205,15 +298,27 @@ func routeMsg(msg Message, contact *Contact, network *Network) {
                 network.returnStoreMessage(msg, contact)
         }
     } else if msg.Type == "RETURN" {
-        switch msg.Name {
-            case "PING":
-                network.handlePingMessage(msg, contact)
-            case "FIND-NODE":
-                network.handleFindContactMessage(msg, contact)
-            case "FIND-VALUE":
-                network.handleFindDataMessage(msg, contact)
-            case "STORE":
-                network.handleStoreMessage(msg, contact)
-        }
+        network.MessageRecord.ActOnMessage(msg, *contact)
     }
 }
+
+func (network *Network) send(msg Message, contact *Contact) {
+    serialized, err := json.Marshal(msg)
+    if err != nil {
+        println("%#v", err)
+        return
+    }
+
+    addr, err := net.ResolveUDPAddr("udp", contact.Address)
+    if err != nil {
+        println("%#v", err)
+        return
+    }
+
+    _, err = network.Conn.WriteTo(serialized, addr)
+    if err != nil {
+        println("%#v", err)
+        return
+    }
+}
+

@@ -15,4 +15,4 @@ FROM alpine:latest
 RUN apk add --no-cache tmux
 
 COPY ping2container.sh .
-COPY mock-kademlia.sh ./kademlia
+COPY kademlia .

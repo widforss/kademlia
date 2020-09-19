@@ -2,18 +2,20 @@ package main
 
 import (
     kademlia "./labCode"
-    "strconv"
+    "math/rand"
+    "os"
+    "time"
 )
 
 const PORT = 9000
 const IFACE = "0.0.0.0"
 
 func main() {
-    id := kademlia.NewRandomKademliaID()
-    me := kademlia.NewContact(id, "127.0.0.1:" + strconv.Itoa(PORT))
-    network := kademlia.Network{
-        RoutingTable: kademlia.NewRoutingTable(me),
+    rand.Seed(time.Now().UnixNano())
+    if len(os.Args) != 1 + 1 {
+        panic("Exactly one command line requirement (peer address) needed!")
     }
-    kademlia.Listen(IFACE, PORT, &network)
+    kademlia.NewKademlia(IFACE, PORT, os.Args[1])
+    <-make(chan struct{})
 }
 
