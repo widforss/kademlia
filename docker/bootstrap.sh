@@ -22,7 +22,7 @@ echo
 for cide in ${cidip[@]}
 do
 eid=`echo $cide | cut -d\: -f1 | cut -c-8`
-cmd="/usr/bin/tmux new-session -d './kademlia ${cip[0]}:9000'"
+cmd="/usr/bin/tmux new-session -d './kademlia ${cip[0]}:9000 > last.log'"
 res=`docker exec $eid sh -c "${cmd}"`
 echo $eid: $cmd
 done

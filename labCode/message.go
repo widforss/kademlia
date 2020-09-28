@@ -17,7 +17,7 @@ type Message struct {
 }
 
 type MessageRecord struct {
-    record map[string]func (Message, Contact)
+    record map[KademliaID]*func (Message, Contact)
     queue chan messageRecordQueueElem
     ttl time.Duration
     mux sync.Mutex
@@ -25,7 +25,7 @@ type MessageRecord struct {
 
 type messageRecordQueueElem struct {
     Deadline time.Time
-    ID string
+    ID KademliaID
     dead func()
 }
 
@@ -55,7 +55,7 @@ func ParseMessage(buf []byte) (Message, error) {
 
 func NewMessageRecord() MessageRecord {
     record := MessageRecord{
-        record: make(map[string]func (Message, Contact)),
+        record: make(map[KademliaID]*func (Message, Contact)),
         queue: make(chan messageRecordQueueElem, 1024),
         ttl: TTL,
         mux: sync.Mutex{},
@@ -83,12 +83,12 @@ func NewMessageRecord() MessageRecord {
 }
 
 func (record *MessageRecord) RecordMessage(
-    kademliaID string,
+    kademliaID KademliaID,
     success func (Message, Contact),
     dead func (),
 ) {
     record.mux.Lock()
-    record.record[kademliaID] = success
+    record.record[kademliaID] = &success
     record.mux.Unlock()
 
     record.queue <- messageRecordQueueElem{
@@ -101,11 +101,12 @@ func (record *MessageRecord) RecordMessage(
 func (record *MessageRecord) ActOnMessage(msg Message, contact Contact) {
     record.mux.Lock()
 
-    success, ok := record.record[msg.RequestID]
+    ID := NewKademliaID(msg.RequestID)
+    success, ok := record.record[*ID]
     if ok {
-        delete(record.record, msg.RequestID)
+        delete(record.record, *ID)
         record.mux.Unlock()
-        success(msg, contact)
+        (*success)(msg, contact)
     } else {
         record.mux.Unlock()
     }
