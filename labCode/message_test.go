@@ -126,7 +126,7 @@ func TestMessage_MessageProcess(t *testing.T) {
 
 	// Test correct message
 	calls = 0
-	r.RecordMessage(id3.String(), testMessage_Success, testMessage_Dead)
+	r.RecordMessage(*id3, testMessage_Success, testMessage_Dead)
 	r.ActOnMessage(message, co1)
 	time.Sleep(TTL * 2)
 	if calls != 1 || callArray[0].dest != "succ" || callArray[0].contact != co1 || !compareMsgs(callArray[0].message, message) {
@@ -135,7 +135,7 @@ func TestMessage_MessageProcess(t *testing.T) {
 
 	// Test timeout
 	calls = 0
-	r.RecordMessage(id3.String(), testMessage_Success, testMessage_Dead)
+	r.RecordMessage(*id3, testMessage_Success, testMessage_Dead)
 	//	r.ActOnMessage(message, co1)
 	time.Sleep(TTL * 2)
 	if calls != 1 || callArray[0].dest != "dead" {
@@ -144,7 +144,7 @@ func TestMessage_MessageProcess(t *testing.T) {
 
 	// Test wrong message
 	calls = 0
-	r.RecordMessage(id4.String(), testMessage_Success, testMessage_Dead)
+	r.RecordMessage(*id4, testMessage_Success, testMessage_Dead)
 	r.ActOnMessage(message, co1)
 	time.Sleep(TTL * 2)
 	if calls != 1 || callArray[0].dest != "dead" {
