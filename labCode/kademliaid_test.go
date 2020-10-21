@@ -53,6 +53,34 @@ func TestNewKademliaID(t *testing.T) {
 	}
 }
 
+// Test that function Hash correctly converts sha512 of data to id correctly
+// First 160 big-endian bits of the sha512 becomes the KademliaID
+func TestCalcHash(t *testing.T) {
+	testValsBytes := []([]byte) {
+		{ },
+		{ 48 },
+	}
+	testValsObj := []KademliaID {
+		{0xcf,0x83,0xe1,0x35,0x7e,0xef,0xb8,0xbd,0xf1,0x54,0x28,0x50,0xd6,0x6d,0x80,0x07,0xd6,0x20,0xe4,0x05},  // Sha256("")
+		{0x31,0xbc,0xa0,0x20,0x94,0xeb,0x78,0x12,0x6a,0x51,0x7b,0x20,0x6a,0x88,0xc7,0x3c,0xfa,0x9e,0xc6,0xf7},  // Sha256("0")
+	}
+
+	for i := 0; i < len(testValsBytes); i++ {
+		// 
+		k := Hash(testValsBytes[i])
+		if *k != testValsObj[i] {
+			t.Errorf("TestNewKademliaID: Error - Compare index %d", i)
+		}
+
+		str := testValsObj[i].String()
+		if len(str) != 40 {
+			t.Errorf("TestCalcHash: Error - Length index %d", i)
+		}
+		if !checkHex(str) {
+			t.Errorf("TestCalcHash: Error - Hex index %d", i)
+		}
+	}
+}
 
 // Test that function Less compares correctly
 func TestCalcLess(t *testing.T) {
