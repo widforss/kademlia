@@ -25,12 +25,24 @@ type Network struct {
     mux sync.RWMutex
 }
 
+// Test channel
+type TestPacket struct {
+    b []byte
+    n int
+    addrStr string
+}
+var boTestMode bool
+var testReadCh chan TestPacket
+var testWriteCh chan TestPacket
+
+
 func NewNetwork(ip string, port uint16) Network {
     id := NewRandomKademliaID()
     me := NewContact(id, "127.0.0.1:" + strconv.Itoa(int(port)))
     me.CalcDistance(me.ID)
 
     iface_port := ip + ":" + strconv.Itoa(int(port))
+    boTestMode = false
     conn, err := net.ListenPacket("udp", iface_port)
     if err != nil {
         panic(err)
@@ -49,10 +61,31 @@ func NewNetwork(ip string, port uint16) Network {
     return network
 }
 
+func (network *Network) SetTestMode(readCh chan TestPacket, writeCh chan TestPacket) {
+    boTestMode = true
+    testReadCh = readCh
+    testWriteCh = writeCh
+}
+
 func Listen(ip string, port uint16, network *Network) {
     var buf [4096]byte
+    var addrStr string
+    var n int
+    var err error
+    var addr net.Addr
     for {
-        n, addr, err := network.Conn.ReadFrom(buf[0:])
+        if boTestMode {
+	    packet := <- testReadCh
+            for i := 0 ; i < packet.n ; i++ {
+                buf[i] = packet.b[i]
+            }
+            n = packet.n
+            addrStr = packet.addrStr
+            err = nil
+        } else {
+            n, addr, err = network.Conn.ReadFrom(buf[0:])
+            addrStr = addr.String()
+        }
         if err != nil {
             println("%#v", err)
             continue
@@ -70,7 +103,8 @@ func Listen(ip string, port uint16, network *Network) {
             (msg.Type == "RPC" && msg.Name == "PING") {
             contact := Contact{
                 ID: sourceID,
-                Address: addr.String(),
+////                Address: addr.String(),
+                Address: addrStr,
             }
             network.RoutingTable.AddContact(contact)
 
@@ -510,16 +544,24 @@ func (network *Network) send(msg Message, contact *Contact) {
         return
     }
 
-    addr, err := net.ResolveUDPAddr("udp", contact.Address)
-    if err != nil {
-        println("%#v", err)
-        return
-    }
+    if boTestMode {
+        var packet TestPacket
+        packet.addrStr = contact.Address
+        packet.b = serialized
+        packet.n = len(serialized)
+        testWriteCh <- packet
+    } else {
+        addr, err := net.ResolveUDPAddr("udp", contact.Address)
+        if err != nil {
+            println("%#v", err)
+            return
+        }
 
-    _, err = network.Conn.WriteTo(serialized, addr)
-    if err != nil {
-        println("%#v", err)
-        return
+        _, err = network.Conn.WriteTo(serialized, addr)
+            if err != nil {
+            println("%#v", err)
+            return
+        }
     }
 }
 
